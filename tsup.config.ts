@@ -13,6 +13,7 @@ export default defineConfig({
     "src/core/persistence/index.ts",
     "src/codegen/index.ts",
     "src/cli/cli.ts",
+    "src/cli/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,
