@@ -1,6 +1,6 @@
 {
   "name": "convograph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TypeScript framework for slot-filling, topic-routing conversational agents that embed into existing LangGraph projects as a single subgraph node.",
   "license": "Apache-2.0",
   "author": "Clark S",
