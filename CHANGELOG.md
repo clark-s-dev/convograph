@@ -1,3 +1,9 @@
+## [0.1.6](https://github.com/clark-s-dev/convograph/compare/v0.1.5...v0.1.6) (2026-04-29)
+
+### Documentation
+
+* **spec:** sync to actual implementation ([52951cf](https://github.com/clark-s-dev/convograph/commit/52951cf1d0953a04e85498710316b6c6b760e1e1))
+
 ## [0.1.5](https://github.com/clark-s-dev/convograph/compare/v0.1.4...v0.1.5) (2026-04-29)
 
 ### Bug Fixes
