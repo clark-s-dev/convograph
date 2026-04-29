@@ -87,7 +87,6 @@
   },
   "files": [
     "dist",
-    "src",
     "README.md",
     "SPEC.md",
     "LICENSE"
