@@ -1,0 +1,113 @@
+{
+  "name": "convograph",
+  "version": "0.1.0",
+  "description": "TypeScript framework for slot-filling, topic-routing conversational agents that embed into existing LangGraph projects as a single subgraph node.",
+  "license": "Apache-2.0",
+  "author": "Clark S",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clark-s-dev/convograph.git"
+  },
+  "homepage": "https://github.com/clark-s-dev/convograph",
+  "bugs": {
+    "url": "https://github.com/clark-s-dev/convograph/issues"
+  },
+  "keywords": [
+    "langgraph",
+    "agent",
+    "chat",
+    "slot-filling",
+    "router",
+    "yaml",
+    "ai-sdk"
+  ],
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./graph": {
+      "types": "./dist/graph/index.d.ts",
+      "import": "./dist/graph/index.js",
+      "require": "./dist/graph/index.cjs"
+    },
+    "./config": {
+      "types": "./dist/core/config/index.d.ts",
+      "import": "./dist/core/config/index.js",
+      "require": "./dist/core/config/index.cjs"
+    },
+    "./router": {
+      "types": "./dist/core/router/index.d.ts",
+      "import": "./dist/core/router/index.js",
+      "require": "./dist/core/router/index.cjs"
+    },
+    "./extractor": {
+      "types": "./dist/core/extractor/index.d.ts",
+      "import": "./dist/core/extractor/index.js",
+      "require": "./dist/core/extractor/index.cjs"
+    },
+    "./reply": {
+      "types": "./dist/core/reply/index.d.ts",
+      "import": "./dist/core/reply/index.js",
+      "require": "./dist/core/reply/index.cjs"
+    },
+    "./drafts": {
+      "types": "./dist/core/drafts/index.d.ts",
+      "import": "./dist/core/drafts/index.js",
+      "require": "./dist/core/drafts/index.cjs"
+    },
+    "./llm": {
+      "types": "./dist/core/llm/index.d.ts",
+      "import": "./dist/core/llm/index.js",
+      "require": "./dist/core/llm/index.cjs"
+    },
+    "./persistence": {
+      "types": "./dist/core/persistence/index.d.ts",
+      "import": "./dist/core/persistence/index.js",
+      "require": "./dist/core/persistence/index.cjs"
+    },
+    "./codegen": {
+      "types": "./dist/codegen/index.d.ts",
+      "import": "./dist/codegen/index.js",
+      "require": "./dist/codegen/index.cjs"
+    }
+  },
+  "bin": {
+    "convograph": "./dist/cli/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "SPEC.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && node -e \"const fs=require('fs');const p='dist/cli/cli.js';let c=fs.readFileSync(p,'utf8');if(!c.startsWith('#!'))fs.writeFileSync(p,'#!/usr/bin/env node\\n'+c);fs.chmodSync(p,0o755);\"",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.41",
+    "@langchain/langgraph": "^1.2.9",
+    "ai": "^6.0.168",
+    "pg": "^8.20.0",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.20.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
