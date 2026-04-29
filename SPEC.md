@@ -1,8 +1,8 @@
 # convograph — Specification
 
-> **Status:** v0 in progress. Built in-tree inside `demo-chat-agent` until v0 is done, then extracted to its own repo.
+> **Status:** v0 shipped. Published on npm as [`convograph`](https://www.npmjs.com/package/convograph). Source at https://github.com/clark-s-dev/convograph. RAG cascade (Module 6) deferred to v1.
 
-> **Audience:** anyone implementing or reviewing convograph itself.
+> **Audience:** anyone implementing or reviewing convograph itself. End-users should start at the [README](./README.md).
 
 > **North star:** [`acme-support-bot`](https://github.com/clark-s-dev/acme-support-bot) — a fictional consumer project with full integration spec. Anything in this doc must let acme-support-bot's setup work.
 
@@ -165,22 +165,30 @@ router:
 ### 5.1 `buildSubgraph(opts)` — primary entry point
 
 ```typescript
-import { buildSubgraph } from "convograph";
+import { buildSubgraph } from "convograph/graph";
+import { parseConfig } from "convograph/config";
 
-const subgraph = await buildSubgraph({
-  yamlPath: "./agent.yaml",         // REQUIRED
-  db: existingPgPool,                // Optional. If absent, convograph creates its own from config.
-  checkpointer: mainCheckpointer,    // Optional. If absent, convograph creates a MemorySaver.
-  llmClient: existingClient,         // Optional. If absent, created from llm config.
-  hooks: { ... },                    // Optional runtime hooks (deferred to v1)
-  logger: console,                   // Optional. Default: console.
+const config = parseConfig(yamlText);
+
+const subgraph = buildSubgraph({
+  config,                              // REQUIRED: parsed convograph config
+  model,                               // REQUIRED: AI SDK LanguageModel
+  jsonModeProvider: "nvidia",          // Optional: response_format hint key
+  drafts,                              // REQUIRED: DraftAdapter (DB-backed)
+  history,                             // Optional: HistoryAdapter (defaults to no-op)
+  actions,                             // Optional: per-topic ActionHandler map
+  callbacks,                           // Optional: SubgraphCallbacks for streaming events
 });
 
 // Use as a standard LangGraph node:
 mainGraph.addNode("chat", subgraph);
 ```
 
-Returns `CompiledStateGraph<InputState, OutputState>` matching LangGraph TS conventions.
+Returns a standard LangGraph `CompiledStateGraph` synchronously (no
+`await` needed; YAML parsing happens at `parseConfig` time, not at
+`buildSubgraph` time). All side-effecting dependencies — DB, history
+store, action handlers — are injected; convograph itself never reaches
+out to a database, an LLM provider, or a checkpointer of its own.
 
 ### 5.2 Input/Output state contract
 
@@ -191,20 +199,48 @@ Returns `CompiledStateGraph<InputState, OutputState>` matching LangGraph TS conv
 
 **Output state** (convograph populates these):
 - `agentReply: string` — final user-facing message
-- `convograph: ConvographOutputState` — namespaced details (active topic, completed task id, metrics, etc.)
+- `convograph: ConvographOutputState` — namespaced details:
+  - `topic: string` — classified topic for this turn
+  - `confidence: number` — router confidence
+  - `slots: SlotMap` — slot snapshot after this turn
+  - `sealed: boolean` — true iff a draft was sealed (action ran)
+  - `actionResult?: unknown` — return value of the action handler
+  - `abandoned: boolean` — true iff the user abandoned the draft
 
-### 5.3 `convograph.utils.*` (Mode B utility surface, partial in v0)
+### 5.3 Streaming entry point
+
+For chat UIs that need token-by-token streaming and partial state events,
+use `runTurnStream` instead of `subgraph.invoke`:
 
 ```typescript
-convograph.utils.classifyIntent(history, query, config)
-convograph.utils.extractSlots(topic, history, currentDraft, config)
-convograph.utils.upsertDraft(threadId, topic, db)
-convograph.utils.completeDraft(draftId, actionResult, db)
-convograph.utils.abandonDraft(draftId, db)
-convograph.utils.queryCompletedTasks(userId, topic?, limit?, db)
+import { runTurnStream } from "convograph/graph";
+
+for await (const ev of runTurnStream(opts, { threadId, userId, userMessage })) {
+  // ev: TurnEvent — discriminated union of router_partial, router_final,
+  // extraction_partial, extraction_final, reply_reasoning_delta, text_delta,
+  // action_result, usage, done, error
+}
 ```
 
-These are the building blocks the subgraph composes; exporting them lets Mode B users build their own graph.
+`runTurnStream` builds the subgraph internally with callbacks that push
+events into a Promise queue, then invokes the subgraph in the background
+and yields events as they arrive. Final `done` event carries the full
+`ConvographOutputState`.
+
+### 5.4 Granular utility imports
+
+The subpath exports let Mode B users compose their own graph:
+
+| Subpath | Exports |
+|---|---|
+| `convograph/router` | `streamClassifyIntent`, `RouterDecision` |
+| `convograph/extractor` | `extractSlots`, `firstMissingSlot`, `isDraftComplete`, `SlotMap` |
+| `convograph/reply` | `streamReply`, `ReplyIntent` |
+| `convograph/drafts` | `forThread<T>()` Postgres-backed slot store |
+| `convograph/llm` | `streamStructured`, `createLlmClient` |
+| `convograph/persistence` | low-level Postgres `PersistenceAdapter` + migrations |
+| `convograph/codegen` | `generateTypes(config)` |
+| `convograph/cli` | `runCli`, `runValidate`, `runMigrate`, `runCodegen` |
 
 ## 6. Internal architecture
 
@@ -214,71 +250,99 @@ These are the building blocks the subgraph composes; exporting them lets Mode B 
 START
   │
   ▼
-load_thread ──────► (loads thread from DB; creates if missing)
+load_thread ──────► (host's HistoryAdapter.load — defaults to empty)
   │
   ▼
-classify_intent ──► (Tagger: streaming JSON {reasoning, topic, confidence})
+classify_intent ──► (Router: streaming JSON {reasoning, topic, confidence})
   │
   ▼
-route_decision ───► branches by topic
+route_decision ───► conditional edge: branches by topic
   │
   ├── "smalltalk" ─────────────► reply_generic ──► END
   │
-  └── "<task topic>" ──► sync_draft ──► (creates/loads/resets draft)
+  └── "<task topic>" ──► sync_draft ──► (DraftAdapter.load → slotsBefore)
                               │
                               ▼
-                        scope_message ──► (appends user message to draft's bucket)
+                        extract_slots ──► (Extractor: streaming JSON {reasoning, updated_slots, ready_to_book, abandon})
                               │
                               ▼
-                        extract_slots ──► (streaming JSON {reasoning, updated_slots, ready_to_book, abandon})
+                        commit_slots ───► (DraftAdapter.save or DraftAdapter.abandon)
                               │
                               ▼
-                        commit_slots ───► (writes to DB)
+                        decide_action ── conditional edge: branches by state
                               │
-                              ▼
-                        decide_response ► branches by state
-                              │
-                              ├── "ask_slot" ──► reply_ask ──► END
-                              ├── "confirm" ───► reply_confirm ──► END
-                              ├── "execute" ───► execute_action ──► seal_draft ──► reply_success ──► END
-                              └── "abandon" ───► reply_abandon ──► END
+                              ├── execute_action ──► seal_draft ──► reply ──► END
+                              ├── set_ask_slot_intent ────────────► reply ──► END
+                              ├── set_confirm_intent ─────────────► reply ──► END
+                              └── set_abandon_intent ─────────────► reply ──► END
 ```
+
+**Reply node merging:** the spec previously listed four separate
+`reply_ask` / `reply_confirm` / `reply_success` / `reply_abandon` nodes.
+The implementation collapses them into a single `reply` node that reads
+`_convograph_replyIntent` and selects phrasing accordingly. The four
+distinct intent kinds (`ask_slot` / `confirm` / `execute_success` /
+`abandon`) are still discrete state values — they're just dispatched by
+the LLM prompt, not by separate graph nodes. This kept the implementation
+simpler without losing any expressivity.
 
 ### 6.2 State channels (subgraph internal)
 
-Namespaced with `_convograph_` prefix to avoid collisions with the host graph:
+Namespaced with `_convograph_` prefix to avoid collisions with the host
+graph. Private to the subgraph; the host never observes them.
 
-- `_convograph_intentDecision` — Tagger's structured output
-- `_convograph_activeDraft` — current draft row
-- `_convograph_extractionResult` — Extractor's structured output
-- `_convograph_replyIntent` — what to convey (ask_slot / confirm / execute / abandon)
+| Channel | Purpose |
+|---|---|
+| `_convograph_history` | Conversation history loaded by `load_thread` |
+| `_convograph_intentDecision` | Router's `RouterDecision` |
+| `_convograph_slotsBefore` | Draft slots loaded from `DraftAdapter.load` |
+| `_convograph_extractionResult` | Extractor's `ExtractionResult` |
+| `_convograph_slotsAfter` | Merged slots after `commit_slots` |
+| `_convograph_replyIntent` | What the `reply` node should convey |
+| `_convograph_actionResult` | Whatever the action handler returned |
 
-These are private; host graph never sees them.
+### 6.3 Adapters (host-injected)
 
-### 6.3 Persistence adapter
-
-Wraps the LangGraph state's per-turn changes and translates them to DB writes. Single class; injected into nodes.
+The spec previously described a single `PersistenceAdapter` class. The
+implementation splits the contract into two narrower interfaces so hosts
+can wire each to whatever storage they prefer (Postgres, Redis, an
+in-memory Map, a remote service). Convograph never opens DB connections
+of its own.
 
 ```typescript
-class PersistenceAdapter {
-  upsertDraft(threadId, topic, slotsBefore): Draft
-  updateDraftSlots(draftId, slots): void
-  appendMessageToBucket(draftId, message): void
-  completeDraft(draftId, actionResult): CompletedTask
-  abandonDraft(draftId, reason): void
-  loadThread(threadId): ThreadState
-  saveThread(thread): void
+interface DraftAdapter {
+  load(threadId: string, topic: string): Promise<SlotMap>;
+  save(threadId: string, topic: string, slots: SlotMap): Promise<void>;
+  seal(threadId: string, topic: string, finalSlots: SlotMap, actionResult: unknown): Promise<void>;
+  abandon(threadId: string, topic: string): Promise<void>;
+}
+
+interface HistoryAdapter {
+  load(threadId: string): Promise<{ role: "user" | "agent"; content: string }[]>;
+  append(threadId: string, userMsg: string, agentReply: string): Promise<void>;
 }
 ```
 
+A Postgres-backed `DraftAdapter` ships in `convograph/drafts`
+(`forThread<T>()`); for tests, see the in-memory implementation referenced
+in README's "Testing your integration" section.
+
 ### 6.4 LLM call sites
 
-Three structured LLM calls per turn (all streaming JSON):
-1. **Router** — `{reasoning, topic, confidence}`
-2. **Extractor** — `{reasoning, updated_slots, ready_to_book, abandon}` (only on task topics)
-3. **Reply** — `{reasoning, reply}` (always; smalltalk path uses canned text)
+Three structured LLM calls per turn:
+1. **Router** (always) — `{reasoning, topic, confidence}` JSON, streamed
+2. **Extractor** (task topics only) — `{reasoning, updated_slots, ready_to_book, abandon}` JSON, streamed
+3. **Reply** — varies by branch:
+   - Task topics → `{reasoning, reply}` JSON streamed (split into `reply_reasoning_delta` + `text_delta` events). Intent kind embedded in the prompt.
+   - Smalltalk → plain `streamText` (no JSON wrapper) producing `text_delta` events directly.
 
-Each lives in `core/tagger/`, `core/extractor/`, `core/reply/`. They share a `streamStructuredJson(model, system, prompt, schema)` helper that does partial-JSON parsing.
+The router and extractor share `streamStructured(opts)` from `core/llm/`,
+which drives a `streamText` call with `response_format=json_object`,
+parses partial JSON on each chunk, and yields successively-more-complete
+snapshots of the parsed object.
+
+Each LLM call surfaces token usage through an `onUsage` callback so the
+host can aggregate per-turn metrics.
 
 ## 7. DB schema
 
@@ -356,33 +420,33 @@ convograph dev                  # Dev server (Mode C, optional in v0)
 
 ## 10. Phased v0 implementation roadmap
 
-| Module | Scope | Lands at |
-|---|---|---|
-| 1 | YAML parser + Zod schema + structured errors | `core/config/` |
-| 2 | DB layer + migrations + persistence adapter | `core/persistence/` |
-| 3 | Codegen | `codegen/` |
-| 4 | LLM wrapper + structured streaming helper | `core/llm/` |
-| 5 | Tagger / Extractor / Reply nodes | `core/tagger/`, `core/extractor/`, `core/reply/` |
-| 6 | RAG cascade (deferred — empty stub in v0) | `core/tagger/rag.ts` |
-| 7 | `buildSubgraph()` glue + nodes/ + state channels | `graph/` |
-| 8 | CLI + scripts | `cli/` |
+| Module | Scope | Lands at | Status |
+|---|---|---|---|
+| 1 | YAML parser + Zod schema + structured errors | `core/config/` | ✅ |
+| 2 | DB layer + migrations + persistence adapter | `core/persistence/` | ✅ |
+| 3 | Codegen | `codegen/` | ✅ |
+| 4 | LLM wrapper + structured streaming helper | `core/llm/` | ✅ |
+| 5 | Router / Extractor / Reply nodes | `core/router/`, `core/extractor/`, `core/reply/` | ✅ |
+| 6 | RAG cascade | `core/router/rag.ts` | ⏸ deferred to v1 |
+| 7 | `buildSubgraph()` + `runTurnStream()` glue | `graph/` | ✅ |
+| 8 | CLI + scripts | `cli/` | ✅ |
 
-After Module 7, the `demo-chat-agent` runs entirely on convograph by replacing `lib/graph.ts` with a thin wrapper. After Module 8, the developer experience is polished and we extract to a separate repo.
+The package is published on npm (`convograph`) and GitHub Packages
+(`@clark-s-dev/convograph`). The `demo-chat-agent` runs entirely on
+the published package via subpath imports.
 
-## 11. Migration of demo-chat-agent (running in parallel)
+## 11. Migration of demo-chat-agent
 
-After each module lands, the corresponding piece of demo code is replaced:
-
-| After module | Demo migration |
+| After module | Demo state |
 |---|---|
-| 1 | `agent.yaml` is added at root and parsed at startup. No runtime change. |
-| 2 | Demo's in-memory `Map` is augmented with shadow writes to DB. Both run side by side. |
-| 3 | Demo agents start importing types from `lib/convograph/generated/`. |
-| 4 | Demo's `lib/llm.ts` is moved into `lib/convograph/core/llm/`. Demo agents re-import from there. |
-| 5 | Demo's `lib/agents/router.ts`, `flight.ts`, `train.ts` are replaced one by one with convograph's generic nodes parameterized by YAML. |
-| 6 | (No demo change — RAG is deferred.) |
-| 7 | Demo's `lib/graph.ts` becomes a thin call to `buildSubgraph(yamlPath)`. |
-| 8 | Demo runs `npx convograph migrate / codegen / validate` as npm scripts. |
+| 1 | ✅ `agent.yaml` parsed at startup |
+| 2 | ✅ Threads / messages / drafts / completed_tasks shadow-written to DB; in-memory `Map` still authoritative for transient state |
+| 3 | ✅ Demo imports generated types from `lib/generated/types.ts` (regenerated by `npx convograph codegen`) |
+| 4 | ✅ Demo's LLM bootstrap re-uses `convograph/llm`'s `createLlmClient` and `streamStructured` |
+| 5 | ✅ Demo's `lib/agents/{flight,train}.ts` deleted; replaced by convograph's YAML-driven generic extractor + reply |
+| 6 | (deferred) |
+| 7 | ✅ Demo's `lib/graph.ts` is a thin translator over `runTurnStream` |
+| 8 | ✅ `npx convograph <validate \| migrate \| codegen>` is the canonical entry point |
 
 ## 12. Design properties to preserve
 
