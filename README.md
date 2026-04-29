@@ -1,8 +1,10 @@
 # convograph
 
-A TypeScript framework for **slot-filling, topic-routing conversational agents**, designed to embed into existing LangGraph projects as a single subgraph node.
+[![npm](https://img.shields.io/npm/v/convograph.svg)](https://www.npmjs.com/package/convograph)
+[![Release](https://github.com/clark-s-dev/convograph/actions/workflows/release.yml/badge.svg)](https://github.com/clark-s-dev/convograph/actions/workflows/release.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-> **Status:** v0, built in-tree inside `demo-chat-agent`. Will be extracted to its own repo once v0 is stable. Until then, import from `@/lib/convograph/...`.
+A TypeScript framework for **slot-filling, topic-routing conversational agents**, designed to embed into existing LangGraph projects as a single subgraph node.
 
 See [`SPEC.md`](./SPEC.md) for the design rationale.
 
@@ -24,14 +26,29 @@ You keep ownership of: the LLM provider, the database, the action handlers, and 
 
 ## Install
 
-For now (in-tree):
-
-```ts
-import { buildSubgraph, runTurnStream } from "@/lib/convograph/graph";
-import { parseConfig } from "@/lib/convograph/core/config";
+```bash
+npm install convograph
 ```
 
-Once extracted to its own repo, the API stays identical — only the import paths change.
+```ts
+import { buildSubgraph, runTurnStream } from "convograph/graph";
+import { parseConfig } from "convograph/config";
+```
+
+### Subpath exports
+
+| Subpath | Use for |
+|---|---|
+| `convograph/graph` | `buildSubgraph`, `runTurnStream`, adapter types |
+| `convograph/config` | `parseConfig`, `loadConfig`, slot/topic schema types |
+| `convograph/router` | `streamClassifyIntent`, `RouterDecision` |
+| `convograph/extractor` | `extractSlots`, `SlotMap`, `ExtractionResult` |
+| `convograph/reply` | `streamReply`, `ReplyIntent` |
+| `convograph/drafts` | `forThread<T>()` Postgres-backed slot store |
+| `convograph/llm` | `streamStructured`, `createLlmClient` |
+| `convograph/persistence` | low-level Postgres adapter + migrations |
+| `convograph/codegen` | TS type generator from agent.yaml |
+| `convograph/cli` | `runCli`, `runValidate`, `runMigrate`, `runCodegen` |
 
 ---
 
@@ -72,8 +89,8 @@ topics:
 ### 2. Build the subgraph
 
 ```ts
-import { buildSubgraph } from "@/lib/convograph/graph";
-import { parseConfig } from "@/lib/convograph/core/config";
+import { buildSubgraph } from "convograph/graph";
+import { parseConfig } from "convograph/config";
 import { readFileSync } from "node:fs";
 
 const config = parseConfig(readFileSync("./agent.yaml", "utf8"));
@@ -125,7 +142,7 @@ console.log(out.convograph);
 
 ```ts
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
-import { buildSubgraph } from "@/lib/convograph/graph";
+import { buildSubgraph } from "convograph/graph";
 
 // Your host graph's state — only `threadId`, `userId`, `userMessage` need to
 // match convograph's input contract; you can add anything else alongside.
@@ -167,7 +184,7 @@ The convograph subgraph is opaque to your host: its internal channels are namesp
 For chat UIs that want token-by-token streaming and partial state updates, use `runTurnStream` instead of `subgraph.invoke`:
 
 ```ts
-import { runTurnStream } from "@/lib/convograph/graph";
+import { runTurnStream } from "convograph/graph";
 
 for await (const ev of runTurnStream(
   { config, model, drafts, history, actions },
@@ -235,10 +252,11 @@ Topics without an action handler will route through the confirm/ask path but nev
 
 ## Testing your integration
 
-The same scripted-mock LLM pattern that backs convograph's own integration tests is reusable:
+You'll write small in-memory adapters and a scripted mock LLM. Reference implementations live in the [demo project's `lib/__tests__/helpers.ts`](https://github.com/clark-s-dev/convograph/blob/main/SPEC.md) — copy it as a starting point or adapt the shape:
 
 ```ts
-import { scriptedModel, inMemoryDraftAdapter, collect } from "@/lib/convograph/__tests__/helpers";
+// inMemoryDraftAdapter, scriptedModel, collect — see helpers.ts in the demo
+import { scriptedModel, inMemoryDraftAdapter, collect } from "./test-helpers";
 
 const drafts = inMemoryDraftAdapter();
 const model = scriptedModel([
@@ -274,9 +292,11 @@ npm test
 
 ```bash
 npm run convograph -- validate    # validate agent.yaml against the schema
-npm run convograph -- migrate     # apply DB migrations
-npm run convograph -- codegen     # regenerate TS types from YAML
+npx convograph migrate     # apply DB migrations
+npx convograph codegen     # regenerate TS types from YAML
 ```
+
+Or programmatic — see [`convograph/cli`](#subpath-exports).
 
 ---
 
@@ -293,14 +313,12 @@ npm run convograph -- codegen     # regenerate TS types from YAML
 | 7 | `buildSubgraph()` + `runTurnStream()` | ✅ |
 | 8 | CLI | ✅ |
 
-Remaining for v0 finish line: spec doc sync (a few sections in `SPEC.md` describe pre-merged-reply topology), then extract to its own repo.
-
 ---
 
 ## Layout
 
 ```
-lib/convograph/
+src/
 ├── core/
 │   ├── config/        — YAML schema + parser + errors
 │   ├── llm/           — streamStructured (partial-JSON + zod validation)
@@ -310,21 +328,18 @@ lib/convograph/
 │   ├── drafts/        — drafts.forThread<T>() Postgres adapter
 │   └── persistence/   — migrations runner + low-level adapter
 ├── graph/
-│   ├── state.ts       — Annotation.Root + ConvographOutputState
-│   ├── buildSubgraph.ts — assembles the StateGraph
-│   └── runTurnStream.ts — async-generator wrapper for streaming
+│   ├── state.ts            — Annotation.Root + ConvographOutputState
+│   ├── buildSubgraph.ts    — assembles the StateGraph
+│   └── runTurnStream.ts    — async-generator wrapper for streaming
 ├── codegen/           — generates TS types from YAML
-├── cli/               — validate / migrate / codegen
-└── generated/         — output of codegen (do not edit)
+└── cli/               — validate / migrate / codegen
 ```
 
 ---
 
-## Discipline
+## Releases
 
-- **`lib/convograph/` imports nothing from outside its own directory.** Treat it as an already-published npm package. This is what will make extraction trivial.
-- The host (demo-chat-agent) imports from convograph; convograph never imports from the host.
-- Demo-specific code lives in `lib/`, never in `lib/convograph/`.
+This package uses [semantic-release](https://semantic-release.gitbook.io/). Pushes to `main` trigger a CI run that reads commit messages, bumps the version per [Conventional Commits](https://www.conventionalcommits.org/), and publishes to npm with a generated changelog. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 
