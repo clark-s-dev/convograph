@@ -41,9 +41,37 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Release
+      - name: Capture pre-release version
+        id: pre
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Release (semantic-release → npmjs.com)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
+
+      - name: Mirror new version to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          POST_VERSION=$(node -p "require('./package.json').version")
+          if [ "${{ steps.pre.outputs.version }}" = "$POST_VERSION" ]; then
+            echo "No new release — skipping GitHub Packages mirror."
+            exit 0
+          fi
+          echo "New version $POST_VERSION — publishing scoped variant to GitHub Packages."
+          cp package.json package.json.bak
+          node -e "
+            const p = require('./package.json');
+            p.name = '@clark-s-dev/convograph';
+            p.publishConfig = { registry: 'https://npm.pkg.github.com', access: 'public' };
+            require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));
+          "
+          echo "//npm.pkg.github.com/:_authToken=$GITHUB_TOKEN" > .npmrc
+          echo "@clark-s-dev:registry=https://npm.pkg.github.com" >> .npmrc
+          npm publish
+          mv package.json.bak package.json
+          rm -f .npmrc

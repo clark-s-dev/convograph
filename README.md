@@ -35,6 +35,8 @@ import { buildSubgraph, runTurnStream } from "convograph/graph";
 import { parseConfig } from "convograph/config";
 ```
 
+> Also mirrored on GitHub Packages as `@clark-s-dev/convograph` (same code, different registry — see [GitHub Packages docs](https://docs.github.com/packages) for auth setup if you prefer that source).
+
 ### Subpath exports
 
 | Subpath | Use for |
