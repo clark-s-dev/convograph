@@ -43,7 +43,9 @@ jobs:
 
       - name: Capture pre-release version
         id: pre
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Release (semantic-release → npmjs.com)
         env:
