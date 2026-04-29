@@ -1,3 +1,9 @@
+## [0.1.5](https://github.com/clark-s-dev/convograph/compare/v0.1.4...v0.1.5) (2026-04-29)
+
+### Bug Fixes
+
+* **build:** exclude TypeScript source from published tarball ([c48077d](https://github.com/clark-s-dev/convograph/commit/c48077d10e73111778573011846dd61e4d5385c8))
+
 ## [0.1.4](https://github.com/clark-s-dev/convograph/compare/v0.1.3...v0.1.4) (2026-04-29)
 
 ### Bug Fixes
